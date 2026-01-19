@@ -1,0 +1,8 @@
+streamlit
+pandas
+openai
+python-dotenv
+matplotlib
+seaborn
+scikit-learn
+tabulate
