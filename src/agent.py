@@ -48,21 +48,6 @@ class DataAnalystAgent:
 
     def process_message(self, user_message: str):
         self.history.append({"role": "user", "content": user_message})
-        
-        try:
-            response = self.client.chat.completions.create(
-                model="openai/gpt-oss-20b",
-                messages=self.history,
-                temperature=0,
-                response_format={"type": "json_object"} # Force JSON for tool usage if needed, but we want mixed. 
-                # Actually, forcing JSON all the time prevents conversational text. 
-                # Let's use function calling or just parse code blocks.
-                # For simplicity in this v1, let's ask it to output a JSON with 'thought', 'code' (optional), 'response' (if no code).
-            )
-            # Re-thinking response format for best structured output without function calling overhead setup in v1
-        except Exception as e:
-            return f"Error connecting to AI: {e}", None
-
         return self._handle_llm_response_v2(user_message)
 
     def _handle_llm_response_v2(self, user_message):
@@ -73,7 +58,7 @@ class DataAnalystAgent:
         {
             "thought": "Reasoning about what to do...",
             "action": "execute_python",
-            "code": "result = df['col'].mean()"
+            "code": "import pandas as pd\\nresult = df['col'].mean()"
         }
         
         If you have the answer or don't need code, respond with JSON:
@@ -93,7 +78,13 @@ class DataAnalystAgent:
                 response_format={"type": "json_object"}
             )
             content = completion.choices[0].message.content
-            data = json.loads(content)
+            print(f"DEBUG: Raw content from LLM: {content}") # Debug print
+            
+            try:
+                data = json.loads(content)
+            except json.JSONDecodeError:
+                # Fallback if JSON is invalid
+                return f"Error: The AI returned invalid JSON. Raw response: {content}", None
             
             # Handle potential list response
             if isinstance(data, list):
@@ -104,20 +95,39 @@ class DataAnalystAgent:
             
             if data.get("action") == "execute_python":
                 code = data.get("code")
+                if not code:
+                     return "Error: No code provided in execute_python action.", None
+                     
                 # Execute code
                 local_vars = {"df": self.df, "pd": pd}
                 try:
+                    # Capture stdout to redirect print statements
+                    old_stdout = sys.stdout
+                    redirected_output = sys.stdout = io.StringIO()
+                    
                     exec(code, {}, local_vars)
-                    result = local_vars.get("result", "No result variable set.")
+                    
+                    sys.stdout = old_stdout
+                    stdout_output = redirected_output.getvalue()
+                    
+                    result = local_vars.get("result", None)
+                    if result is None and stdout_output:
+                        result = stdout_output.strip()
+                    elif result is None:
+                        result = "No result variable set and no output captured."
                     
                     # Feed result back to LLM
                     self.history.append({"role": "assistant", "content": json.dumps(data)})
                     self.history.append({"role": "system", "content": f"Execution Result: {result}"})
                     
                     # Get final conversational response
+                    # For final response, we don't force JSON, we just want text
+                    # We inject a specific instruction to ensure no code is shown
+                    final_messages = self.history + [{"role": "system", "content": "IMPORTANT: Provide a natural language answer based on the execution result. Do NOT show the python code or technical details in your response. Just the answer."}]
+                    
                     final_completion = self.client.chat.completions.create(
                         model="openai/gpt-oss-20b",
-                        messages=self.history
+                        messages=final_messages
                     )
                     final_response = final_completion.choices[0].message.content
                     self.history.append({"role": "assistant", "content": final_response})
@@ -127,6 +137,8 @@ class DataAnalystAgent:
                     return f"Error executing code: {e}", None
             else:
                 response = data.get("response")
+                if not response:
+                     response = str(data) # Fallback
                 self.history.append({"role": "assistant", "content": response})
                 return response, None
 

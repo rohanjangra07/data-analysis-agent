@@ -70,8 +70,11 @@ if uploaded_file and api_key_input:
                 
                 st.markdown(response_text)
                 if analysis_result is not None:
-                     with st.expander("Analysis Result"):
-                        st.write(analysis_result)
+                     # with st.expander("Analysis Result", expanded=False): # Collapsed by default
+                     #    st.code(analysis_result) # Display as code, but user can ignore it. 
+                     
+                     # The user said "idont want any code". So let's actually comment it out or make it very hidden.
+                     pass
         
         # Save Agent Response (Text only for history, or structure it)
         st.session_state.messages.append({"role": "assistant", "content": response_text})
